@@ -10,7 +10,7 @@ import os
 # ==========================================
 # CẤU HÌNH BOT
 # ==========================================
-TOKEN = 'YOUR_BOT_TOKEN_HERE'
+TOKEN = 'MTQ3NTAzODcyMjUyODM3ODkzMw.G25Ojc.FY9v3T4IT63rj8wMgMOQXWaJhb7eQdrGi-sh0c'
 PREFIX = 'k!'
 
 class NurseryManager(commands.Bot):
@@ -205,7 +205,4 @@ async def setlevel(ctx, member: discord.Member, lvl: int):
 # ==========================================
 if __name__ == "__main__":
     bot.run(TOKEN)
-    if __name__ == "__main__":
-    # Bot sẽ tìm biến có tên là 'DISCORD_TOKEN' trong phần Settings/Variables của Host
-    TOKEN = os.getenv('DISCORD_TOKEN') 
-    bot.run(TOKEN)
+  
