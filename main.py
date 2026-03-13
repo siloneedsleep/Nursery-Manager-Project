@@ -20,7 +20,7 @@ TOKEN = os.getenv('DISCORD_TOKEN')
 
 OWNER_ID = 914831312295165982
 
-PREFIXES = ['>', '?']
+PREFIXES = os.getenv('COMMAND_PREFIXES', 'k!,K!').split(',')
 
 FISH_DATA = {
 
