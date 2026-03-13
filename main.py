@@ -18,7 +18,7 @@ load_dotenv()
 
 TOKEN = os.getenv('DISCORD_TOKEN')
 
-OWNER_ID = 914831312295165982 
+OWNER_ID = 914831312295165982
 
 PREFIXES = ['>', '?']
 
@@ -104,7 +104,7 @@ class UltimateNurseryBot(commands.Bot):
 
         c = self.conn.cursor()
 
-        c.execute("UPDATE users SET xp=?, lvl=?, candies=?, bank=?, mood=? WHERE user_id=?", 
+        c.execute("UPDATE users SET xp=?, lvl=?, candies=?, bank=?, mood=? WHERE user_id=?",
 
                   (new_xp, new_lvl, max(0, can_old + candy), max(0, bnk_old + bank), min(100, max(0, mood_old + mood)), uid))
 
@@ -158,7 +158,9 @@ def is_admin_or_owner():
 
     async def predicate(ctx):
 
-        if ctx.author.id == OWNER_ID: return True
+        if ctx.author.id == OWNER_ID:
+
+            return True
 
         c = bot.conn.cursor()
 
@@ -168,11 +170,68 @@ def is_admin_or_owner():
 
     return commands.check(predicate)
 
+def normalize_class_name(name: str) -> str:
+
+    return name.strip().lower()
+
+def get_classroom_record(name: str):
+
+    c = bot.conn.cursor()
+
+    c.execute("SELECT class_name, role_id, teacher_id FROM classrooms WHERE class_name = ?", (normalize_class_name(name),))
+
+    return c.fetchone()
+
+def get_all_classrooms():
+
+    c = bot.conn.cursor()
+
+    c.execute("SELECT class_name, role_id, teacher_id FROM classrooms ORDER BY class_name ASC")
+
+    return c.fetchall()
+
+def format_teacher(guild: discord.Guild, teacher_id: Optional[int]) -> str:
+
+    if not teacher_id:
+
+        return "Chưa phân công"
+
+    teacher = guild.get_member(teacher_id)
+
+    if teacher:
+
+        return teacher.mention
+
+    return f"`ID {teacher_id}` (không còn trong server)"
+
+async def resolve_classroom(ctx, name: str):
+
+    record = get_classroom_record(name)
+
+    if not record:
+
+        await err_emb(ctx, "Lớp này chưa được tạo!")
+
+        return None
+
+    class_name, role_id, teacher_id = record
+
+    role = ctx.guild.get_role(role_id)
+
+    if not role:
+
+        await err_emb(ctx, "Role của lớp này không còn tồn tại. Hãy dùng `class setup` để gắn lại role nhé!")
+
+        return None
+
+    return class_name, role, teacher_id
+
 # ==========================================
 
 # 3. NHÓM LỆNH OWNER (CHỦ TRƯỞNG)
 
 # ==========================================
+
 
 @bot.command()
 
@@ -256,39 +315,131 @@ async def classroom(ctx):
 
 async def class_setup(ctx, name: str, role: discord.Role):
 
-    bot.conn.cursor().execute("INSERT OR REPLACE INTO classrooms VALUES (?, ?, ?)", (name.lower(), role.id, None))
+    class_name = normalize_class_name(name)
+
+    if not class_name:
+
+        return await err_emb(ctx, "Tên lớp không được để trống!")
+
+    c = bot.conn.cursor()
+
+    existing = get_classroom_record(class_name)
+
+    if existing:
+
+        c.execute("UPDATE classrooms SET role_id = ? WHERE class_name = ?", (role.id, class_name))
+
+        message = f"Đã cập nhật lớp **{class_name.upper()}** sang Role {role.mention}!"
+
+    else:
+
+        c.execute("INSERT INTO classrooms (class_name, role_id, teacher_id) VALUES (?, ?, ?)", (class_name, role.id, None))
+
+        message = f"Lớp **{class_name.upper()}** đã được gắn với Role {role.mention}!"
 
     bot.conn.commit()
 
-    await q_emb(ctx, "✅ TẠO LỚP THÀNH CÔNG", f"Lớp **{name.upper()}** đã được gắn với Role {role.mention}!", 0x2ecc71)
+    await q_emb(ctx, "✅ CẤU HÌNH LỚP THÀNH CÔNG", message, 0x2ecc71)
+
+    await send_log(ctx, "CẬP NHẬT LỚP HỌC", f"**Lớp:** {class_name.upper()}\n**Role:** {role.mention}", 0x2ecc71)
+
+@classroom.command(name="list", aliases=["all", "ls"])
+
+async def class_list(ctx):
+
+    classrooms = get_all_classrooms()
+
+    if not classrooms:
+
+        return await err_emb(ctx, "Hiện chưa có lớp học nào được tạo!")
+
+    lines = []
+
+    for class_name, role_id, teacher_id in classrooms:
+
+        role = ctx.guild.get_role(role_id)
+
+        role_text = role.mention if role else "Role đã bị xóa"
+
+        class_size = len(role.members) if role else 0
+
+        teacher_text = format_teacher(ctx.guild, teacher_id)
+
+        lines.append(f"**{class_name.upper()}** | {role_text} | GV: {teacher_text} | Sĩ số: **{class_size}** bé")
+
+    await q_emb(ctx, "📚 DANH SÁCH LỚP HỌC", "\n".join(lines), 0x3498db)
 
 @classroom.command(name="info")
 
 async def class_info(ctx, name: str):
 
-    c = bot.conn.cursor()
+    resolved = await resolve_classroom(ctx, name)
 
-    c.execute("SELECT role_id FROM classrooms WHERE class_name = ?", (name.lower(),))
+    if not resolved:
 
-    res = c.fetchone()
+        return
 
-    if not res: return await err_emb(ctx, "Không tìm thấy lớp học này!")
+    class_name, role, teacher_id = resolved
 
-    
+    members_preview = ", ".join(member.mention for member in role.members[:10]) or "Chưa có bé nào trong lớp."
 
-    role = ctx.guild.get_role(res[0])
+    if len(role.members) > 10:
 
-    if not role: return await err_emb(ctx, "Role của lớp này đã bị xóa khỏi server!")
+        members_preview += f"\n... và thêm **{len(role.members) - 10}** bé nữa."
 
-    embed = discord.Embed(title=f"🏫 THÔNG TIN LỚP: {name.upper()}", color=0x3498db)
+    embed = discord.Embed(title=f"🏫 THÔNG TIN LỚP: {class_name.upper()}", color=0x3498db)
 
     embed.add_field(name="🏷️ Role Lớp", value=role.mention, inline=True)
 
+    embed.add_field(name="👩‍🏫 Giáo viên", value=format_teacher(ctx.guild, teacher_id), inline=True)
+
     embed.add_field(name="👥 Sĩ số", value=f"**{len(role.members)}** bé", inline=True)
+
+    embed.add_field(name="🧸 Danh sách nhanh", value=members_preview, inline=False)
 
     embed.set_thumbnail(url=ctx.guild.icon.url if ctx.guild.icon else None)
 
     await ctx.send(embed=embed)
+
+@classroom.command(name="teacher")
+
+@is_admin_or_owner()
+
+async def class_teacher(ctx, name: str, member: Optional[discord.Member] = None):
+
+    record = get_classroom_record(name)
+
+    if not record:
+
+        return await err_emb(ctx, "Lớp này chưa được tạo!")
+
+    class_name, _, _ = record
+
+    if member and member.bot:
+
+        return await err_emb(ctx, "Không thể phân công bot làm giáo viên lớp nhé!")
+
+    c = bot.conn.cursor()
+
+    if member is None:
+
+        c.execute("UPDATE classrooms SET teacher_id = NULL WHERE class_name = ?", (class_name,))
+
+        bot.conn.commit()
+
+        await q_emb(ctx, "🧹 GỠ GIÁO VIÊN CHỦ NHIỆM", f"Đã gỡ phân công giáo viên khỏi lớp **{class_name.upper()}**.", 0xe67e22)
+
+        await send_log(ctx, "GỠ GIÁO VIÊN CHỦ NHIỆM", f"**Lớp:** {class_name.upper()}", 0xe67e22)
+
+        return
+
+    c.execute("UPDATE classrooms SET teacher_id = ? WHERE class_name = ?", (member.id, class_name))
+
+    bot.conn.commit()
+
+    await q_emb(ctx, "👩‍🏫 PHÂN CÔNG GIÁO VIÊN", f"Đã phân công {member.mention} phụ trách lớp **{class_name.upper()}**.", 0x1abc9c)
+
+    await send_log(ctx, "PHÂN CÔNG GIÁO VIÊN", f"**Lớp:** {class_name.upper()}\n**Giáo viên:** {member.mention}", 0x1abc9c)
 
 @classroom.command(name="add")
 
@@ -296,27 +447,85 @@ async def class_info(ctx, name: str):
 
 async def class_add(ctx, name: str, member: discord.Member):
 
-    c = bot.conn.cursor()
+    resolved = await resolve_classroom(ctx, name)
 
-    c.execute("SELECT role_id FROM classrooms WHERE class_name = ?", (name.lower(),))
+    if not resolved:
 
-    res = c.fetchone()
+        return
 
-    if not res: return await err_emb(ctx, "Lớp này chưa được tạo!")
+    class_name, role, _ = resolved
 
-    
+    other_class_roles = []
 
-    role = ctx.guild.get_role(res[0])
+    for other_name, role_id, _ in get_all_classrooms():
+
+        if other_name == class_name:
+
+            continue
+
+        other_role = ctx.guild.get_role(role_id)
+
+        if other_role and other_role in member.roles:
+
+            other_class_roles.append(other_role)
+
+    if role in member.roles and not other_class_roles:
+
+        return await err_emb(ctx, f"{member.mention} đã ở sẵn lớp **{class_name.upper()}** rồi!")
 
     try:
 
-        await member.add_roles(role)
+        if other_class_roles:
 
-        await q_emb(ctx, "🎒 NHẬP HỌC", f"Đã bế bé {member.mention} vào lớp **{name.upper()}** ({role.name})!", 0x9b59b6)
+            await member.remove_roles(*other_class_roles, reason=f"Chuyển lớp sang {class_name.upper()}")
+
+        if role not in member.roles:
+
+            await member.add_roles(role, reason=f"Xếp vào lớp {class_name.upper()}")
+
+        moved_from = ""
+
+        if other_class_roles:
+
+            moved_from = f"\nĐã chuyển bé khỏi: {', '.join(role_item.mention for role_item in other_class_roles)}"
+
+        await q_emb(ctx, "🎒 NHẬP HỌC", f"Đã bế bé {member.mention} vào lớp **{class_name.upper()}** ({role.mention})!{moved_from}", 0x9b59b6)
+
+        await send_log(ctx, "XẾP LỚP HỌC SINH", f"**Lớp mới:** {class_name.upper()}\n**Học sinh:** {member.mention}", 0x9b59b6)
 
     except discord.Forbidden:
 
-        await err_emb(ctx, "Bot không có quyền gắn Role này! Hãy kéo Role của bot lên cao hơn Role lớp.")
+        await err_emb(ctx, "Bot không có quyền chỉnh Role này! Hãy kéo Role của bot lên cao hơn Role lớp nhé.")
+
+@classroom.command(name="remove", aliases=["kick"])
+
+@is_admin_or_owner()
+
+async def class_remove(ctx, name: str, member: discord.Member):
+
+    resolved = await resolve_classroom(ctx, name)
+
+    if not resolved:
+
+        return
+
+    class_name, role, _ = resolved
+
+    if role not in member.roles:
+
+        return await err_emb(ctx, f"{member.mention} hiện không ở lớp **{class_name.upper()}**.")
+
+    try:
+
+        await member.remove_roles(role, reason=f"Rời lớp {class_name.upper()}")
+
+        await q_emb(ctx, "🧸 RỜI LỚP", f"Đã đưa bé {member.mention} ra khỏi lớp **{class_name.upper()}**.", 0xe67e22)
+
+        await send_log(ctx, "XÓA HỌC SINH KHỎI LỚP", f"**Lớp:** {class_name.upper()}\n**Học sinh:** {member.mention}", 0xe67e22)
+
+    except discord.Forbidden:
+
+        await err_emb(ctx, "Bot không có quyền gỡ Role này! Hãy kiểm tra thứ tự Role của bot nhé.")
 
 @classroom.command(name="reward")
 
@@ -324,29 +533,63 @@ async def class_add(ctx, name: str, member: discord.Member):
 
 async def class_reward(ctx, name: str, amount: int):
 
+    if amount <= 0:
+
+        return await err_emb(ctx, "Số kẹo thưởng phải lớn hơn 0 nhé!")
+
+    resolved = await resolve_classroom(ctx, name)
+
+    if not resolved:
+
+        return
+
+    class_name, role, _ = resolved
+
+    if not role.members:
+
+        return await err_emb(ctx, "Lớp này chưa có bé nào để phát thưởng!")
+
     c = bot.conn.cursor()
 
-    c.execute("SELECT role_id FROM classrooms WHERE class_name = ?", (name.lower(),))
+    for member in role.members:
 
-    res = c.fetchone()
+        bot.get_user(member.id)
 
-    if not res: return await err_emb(ctx, "Lớp không tồn tại!")
-
-    role = ctx.guild.get_role(res[0])
-
-    
-
-    for m in role.members: 
-
-        bot.get_user(m.id)
-
-        bot.conn.cursor().execute("UPDATE users SET candies=candies+? WHERE user_id=?", (amount, m.id))
+        c.execute("UPDATE users SET candies = candies + ? WHERE user_id = ?", (amount, member.id))
 
     bot.conn.commit()
 
-    
+    total_amount = amount * len(role.members)
 
-    await q_emb(ctx, "🎁 THƯỞNG LỚP", f"Bảo mẫu đã phát **{amount} 🍬** cho mỗi bé ở lớp {role.mention}!", 0xf1c40f)
+    await q_emb(ctx, "🎁 THƯỞNG LỚP", f"Bảo mẫu đã phát **{amount} 🍬** cho mỗi bé ở lớp {role.mention}!\nTổng phát: **{total_amount:,} 🍬**", 0xf1c40f)
+
+    await send_log(ctx, "THƯỞNG THEO LỚP", f"**Lớp:** {class_name.upper()}\n**Số bé:** {len(role.members)}\n**Thưởng mỗi bé:** {amount:,} 🍬", 0xf1c40f)
+
+@classroom.command(name="delete", aliases=["del", "removeclass"])
+
+@is_admin_or_owner()
+
+async def class_delete(ctx, name: str):
+
+    record = get_classroom_record(name)
+
+    if not record:
+
+        return await err_emb(ctx, "Lớp này chưa được tạo!")
+
+    class_name, role_id, _ = record
+
+    role = ctx.guild.get_role(role_id)
+
+    bot.conn.cursor().execute("DELETE FROM classrooms WHERE class_name = ?", (class_name,))
+
+    bot.conn.commit()
+
+    role_text = role.mention if role else f"`ID {role_id}`"
+
+    await q_emb(ctx, "🗑️ XÓA CẤU HÌNH LỚP", f"Đã xóa lớp **{class_name.upper()}** khỏi hệ thống quản lý.\nRole liên kết trước đó: {role_text}\n*Lưu ý: Bot không xóa Discord role đang có.*", 0xff4757)
+
+    await send_log(ctx, "XÓA CẤU HÌNH LỚP", f"**Lớp:** {class_name.upper()}\n**Role cũ:** {role_text}", 0xff4757)
 
 # ==========================================
 
@@ -656,7 +899,7 @@ async def help_command(ctx, cmd: Optional[str] = None):
 
         emb.set_thumbnail(url=bot.user.display_avatar.url)
 
-        emb.add_field(name="🏫 LỚP HỌC", value="`class info`, `class setup`, `class add`, `class reward`", inline=False)
+        emb.add_field(name="🏫 LỚP HỌC", value="`class list`, `class info`, `class setup`, `class teacher`, `class add`, `class remove`, `class reward`, `class delete`", inline=False)
 
         emb.add_field(name="🍬 KINH TẾ", value="`profile`, `work`, `daily`, `fish`, `dep`, `with`, `leaderboard`", inline=False)
 
@@ -667,6 +910,27 @@ async def help_command(ctx, cmd: Optional[str] = None):
         emb.set_footer(text=f"Yêu cầu bởi {ctx.author.display_name}")
 
         return await ctx.send(embed=emb)
+
+    if cmd.lower() in ["classroom", "class"]:
+
+        return await q_emb(
+
+            ctx,
+
+            "🏫 HỆ THỐNG LỚP HỌC",
+
+            "`class list` - Xem toàn bộ lớp đang có.\n"
+            "`class info <tên>` - Xem role, giáo viên và sĩ số của lớp.\n"
+            "`class setup <tên> <@role>` - Tạo hoặc cập nhật role cho lớp.\n"
+            "`class teacher <tên> [@giáo_viên]` - Gán giáo viên, bỏ trống để gỡ phân công.\n"
+            "`class add <tên> <@bé>` - Xếp một bé vào lớp, tự gỡ lớp cũ nếu có.\n"
+            "`class remove <tên> <@bé>` - Đưa một bé ra khỏi lớp.\n"
+            "`class reward <tên> <số_kẹo>` - Phát kẹo cho cả lớp.\n"
+            "`class delete <tên>` - Xóa cấu hình lớp khỏi hệ thống.",
+
+            0x3498db
+
+        )
 
     
 
@@ -686,9 +950,22 @@ async def help_command(ctx, cmd: Optional[str] = None):
 
         "coinflip": "Đoán đồng xu (Sấp/Ngửa) 🪙.",
 
+        "class list": "Xem danh sách toàn bộ lớp đang được cấu hình trong server.",
+
         "class info": "Xem thông tin số lượng thành viên của một lớp.",
 
-        "class add": "Admin: Kéo bé vào một lớp học."
+
+        "class setup": "Admin: Tạo lớp mới hoặc cập nhật role liên kết cho lớp.",
+
+        "class teacher": "Admin: Gán hoặc gỡ giáo viên chủ nhiệm cho lớp.",
+
+        "class add": "Admin: Kéo bé vào một lớp học. Nếu bé đang ở lớp khác, bot sẽ tự chuyển lớp.",
+
+        "class remove": "Admin: Đưa một bé ra khỏi lớp học.",
+
+        "class reward": "Admin: Phát kẹo cho toàn bộ bé đang ở trong lớp.",
+
+        "class delete": "Admin: Xóa cấu hình lớp khỏi hệ thống quản lý."
 
     }
 
