@@ -1,19 +1,11 @@
 import discord
-
 from discord.ext import commands
-
 import sqlite3
-
 import random
-
 import datetime
-
 import asyncio
-
 import os
-
 from typing import Optional
-
 from dotenv import load_dotenv
 
 # ==========================================
@@ -28,7 +20,7 @@ TOKEN = os.getenv('DISCORD_TOKEN')
 
 OWNER_ID = 914831312295165982 
 
-PREFIXES = ['k!', 'K!']
+PREFIXES = ['>', '?']
 
 FISH_DATA = {
 
